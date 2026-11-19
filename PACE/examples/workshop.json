@@ -1,0 +1,10 @@
+{
+  "id": "workshop-snapshot",
+  "question": "What is the chair's last name and the final registration date for the Alder workshop? Check both the committee record and the registrar's dated correction before answering. Format the answer as Lastname | YYYY-MM-DD.",
+  "pages": [
+    {"id": "index", "title": "Alder workshop bulletin", "text": "Alder workshop records are split between the programme committee and the registration office. The directory lists them as committee and registrar."},
+    {"id": "committee", "title": "Programme committee appointment", "text": "The minute for the Alder workshop names the chair as Inez Maren. Emile Vale chaired the preceding event."},
+    {"id": "registrar", "title": "Registrar's dated correction", "text": "Registrar's correction for Alder: the final registration date is 2031-09-17. The earlier draft date of 2031-09-10 was withdrawn."}
+  ],
+  "reference": "Maren | 2031-09-17"
+}

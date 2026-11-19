@@ -1,0 +1,17 @@
+# Local credentials and configuration
+.local.json
+.env
+.env.*
+!.env.example
+.secrets/
+*.pem
+*.key
+
+# Local execution
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+.cache/
+PACE/results/
+DAG-PACE/results/

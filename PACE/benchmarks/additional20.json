@@ -1,0 +1,30 @@
+{
+  "rows": [
+    200,
+    22,
+    4,
+    223,
+    45,
+    192,
+    201,
+    303,
+    312,
+    330,
+    9,
+    6,
+    8,
+    10,
+    466,
+    29,
+    27,
+    52,
+    474,
+    97
+  ],
+  "snapshots": {
+    "https://2024.aclweb.org/": "acl2024.json",
+    "https://www.nmun.org/": "nmun.json",
+    "https://www.poms.org/": "poms.json",
+    "https://sigchi.org/": "sigchi.json"
+  }
+}

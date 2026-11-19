@@ -1,0 +1,6 @@
+.local.json
+.venv/
+.cache/
+__pycache__/
+*.egg-info/
+results/
