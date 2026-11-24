@@ -3,6 +3,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
+from benchmarks.grading import LEGACY
 from benchmarks.webwalkerqa import CACHE, CHAT, benchmark_chat, grade, load_dataset
 from benchmarks.webwalker_snapshot import site_tools
 from cohorts import AUDIT, LABELS, cohorts, read
@@ -65,7 +66,7 @@ def audit_row(item):
         if dst.exists():
             continue
         api = API.configured()
-        verdict = grade(row, result["answer"], api, CHAT)
+        verdict = grade(row, result["answer"], api, CHAT, result["grade"].get("version", LEGACY))
         write_result(dst, {"grade": verdict, "usage": api.usage})
     if grades[0]:
         return
@@ -83,7 +84,7 @@ def audit_row(item):
             api = API.configured()
             action = benchmark_chat(api, CHAT, original if arm == "original" else reverted, "actor")
             answer = action.get("args", {}).get("answer") if action.get("tool") == "finish" else None
-            verdict = grade(row, answer, api, CHAT) if answer else None
+            verdict = grade(row, answer, api, CHAT, result["grade"].get("version", LEGACY)) if answer else None
             write_result(dst, {"ids": changed, "action": action, "grade": verdict, "usage": api.usage})
         break
     print("audited", n, flush=True)

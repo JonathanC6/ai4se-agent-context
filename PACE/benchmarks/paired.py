@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from pace.records import write_result
+from .grading import grading_settings
 from .webwalkerqa import CACHE, CHAT, DATA_SHA, EMBED, REVISION, ROOT, load_dataset, run_case
 from .webwalker_snapshot import site_tools
 
@@ -31,6 +32,7 @@ def main(variant="pace", strategy_factory=None, out=None):
                   actor=CHAT, summary=CHAT, embedding=EMBED, judge=CHAT,
                   budget=128000, horizon=16, max_steps=16)
     cfg = args.out / "config.json"
+    config.update(grading_settings(cfg))
     if cfg.exists() and json.loads(cfg.read_text()) != config:
         raise ValueError("output directory contains another configuration")
     write_result(cfg, config)

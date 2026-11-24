@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from benchmarks import webwalkerqa
+from benchmarks.grading import LEGACY, SEMANTIC, grading_settings
 from pace.providers import ReplyFormatError, json_object
 from benchmarks.webwalker_snapshot import WINDOW, PageParser, site_tools, snapshot_digest
 
@@ -41,6 +42,34 @@ class WebWalkerTests(unittest.TestCase):
         page["text"] += "changed"
         with self.assertRaises(ValueError):
             site_tools(snapshot)
+
+    def test_standalone_dates_are_compared_without_a_model(self):
+        api = Mock()
+        row = {"question": "是哪天？", "answer": "三月十四日"}
+        for answer in ("It is March 14th.", "is March 14", "14 March", "３月１４日"):
+            with self.subTest(answer=answer):
+                self.assertTrue(webwalkerqa.grade(row, answer, api, "model")["correct"])
+        api.chat.assert_not_called()
+
+    def test_existing_configuration_preserves_its_grader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            self.assertEqual(grading_settings(path), {"grading_version": SEMANTIC})
+            path.write_text('{}')
+            self.assertEqual(grading_settings(path), {})
+        api = Mock()
+        api.chat.return_value = {"correct": True}
+        verdict = webwalkerqa.grade({"question": "Q", "answer": "三月十四日"}, "March 14", api, "m", LEGACY)
+        self.assertEqual(verdict["method"], "judge")
+        api.chat.assert_called_once()
+
+    def test_date_in_a_longer_answer_does_not_shortcut_the_judge(self):
+        api = Mock()
+        api.chat.return_value = {"correct": False, "reason": "wrong or incomplete"}
+        for ref, answer in [("3月14日", "Not March 14"), ("3月14日", "March 13 or March 14"),
+                            ("2024年3月14日", "March 14"), ("3月14日和李老师", "March 14")]:
+            self.assertFalse(webwalkerqa.grade({"question": "Q", "answer": ref}, answer, api, "m")["correct"])
+        self.assertEqual(api.chat.call_count, 4)
 
     def test_json_recovery_and_judge_isolation(self):
         self.assertEqual(json_object('Reply\n```json\n{"args": {"x": 1}}\n```'), {"args": {"x": 1}})

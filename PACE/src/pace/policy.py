@@ -22,6 +22,9 @@ class Settings:
     adaptation: float = 0.5
     multi_level: bool = True
     glimpse_limit: int = 3
+    guided_glimpse: bool = False
+    pressure_power: float = 1.0
+    pressure_mode: str = "max"
 
     def __post_init__(self):
         if min(self.horizon, self.budget, self.recent) < 1:
@@ -34,12 +37,23 @@ class Settings:
             raise ValueError("invalid temperature or adaptation")
         if not 0 <= self.glimpse_limit <= 3:
             raise ValueError("glimpse_limit must be between 0 and 3")
+        if not math.isfinite(self.pressure_power) or self.pressure_power <= 0:
+            raise ValueError("pressure_power must be finite and positive")
+        if self.pressure_mode not in ("max", "occupancy"):
+            raise ValueError("unknown pressure mode")
 
     def pressure(self, step: int, previous_tokens: int) -> float:
-        return min(1.0, max(step / self.horizon, previous_tokens / self.budget))
+        progress = min(1.0, step / self.horizon)
+        occupancy = min(1.0, previous_tokens / self.budget)
+        if self.pressure_mode == "occupancy":
+            # 窗口越空，进度超过占用率的那一部分就越少计入压力。
+            return occupancy + occupancy * max(0.0, progress - occupancy)
+        return max(progress, occupancy)
 
     def boundaries(self, pressure):
-        return tuple(x * (1 + self.adaptation * pressure) for x in self.thresholds)
+        # 原论文用线性压力。平方曲线在中低压力时保留更多细节，两端阈值一致。
+        scale = 1 + self.adaptation * pressure ** self.pressure_power
+        return tuple(x * scale for x in self.thresholds)
 
     def level(self, weight, boundaries):
         if self.multi_level:

@@ -14,7 +14,8 @@ from .paper_pilot import extract_page
 from .webwalker_snapshot import PageParser, USER_AGENT
 from .webwalkerqa import CACHE
 
-PAGE_CACHE = CACHE / "full-live-v1"
+LEGACY_BROWSER = "full-live-v1"
+CURRENT_BROWSER = "full-live-v2"
 locks = [threading.Lock() for _ in range(128)]
 
 
@@ -63,11 +64,13 @@ class Links(PageParser):
         super().handle_endtag(tag)
 
 
-def read_page(url, sites):
+def read_page(url, sites, protocol=CURRENT_BROWSER):
+    if protocol not in (LEGACY_BROWSER, CURRENT_BROWSER):
+        raise ValueError("unknown browser protocol")
     if not allowed(url, sites):
         raise ValueError("choose a discovered URL on the benchmark site")
     digest = hashlib.sha256(url.encode()).hexdigest()
-    path = PAGE_CACHE / f"{digest}.json"
+    path = CACHE / protocol / f"{digest}.json"
     with locks[int(digest[:2], 16) % len(locks)]:
         if path.exists():
             return json.loads(path.read_text())
@@ -83,7 +86,7 @@ def read_page(url, sites):
                 charset = response.headers.get_content_charset() or (meta[1].decode() if meta else "utf-8")
             parser = Links()
             parser.feed(data.decode(charset, errors="replace"))
-            page = parser.page(final)
+            page = parser.page(final, fallback_empty=protocol != LEGACY_BROWSER)
             page["text"] = page["text"][:240000]
             links = {}
             for href in sorted(parser.links):
@@ -109,8 +112,21 @@ def terms(text):
         [chunk] if chunk.isascii() or len(chunk) == 1 else [chunk[i:i+2] for i in range(len(chunk)-1)])}
 
 
+def received_page_text(turn):
+    # visit 成功交给提取器的正文窗口才有这个头；仅返回链接的空页不计。
+    if turn["kind"] != "visit":
+        return False
+    header = turn["observation"].partition("\n")[0]
+    match = re.fullmatch(r"https?://.+ chars (\d+):(\d+)/(\d+)", header)
+    if not match:
+        return False
+    start, end, length = map(int, match.groups())
+    return start < end <= length
+
+
 class Browser:
-    def __init__(self, root, api, sites):
+    def __init__(self, root, api, sites, protocol=CURRENT_BROWSER):
+        self.protocol = protocol
         self.root, self.api, self.sites = root, api, sites
         self.labels = {root: "Site homepage"}
         self.pages = {}
@@ -123,7 +139,7 @@ class Browser:
             raise ValueError(self.errors[url])
         if url not in self.pages:
             try:
-                page = read_page(url, self.sites)
+                page = read_page(url, self.sites, self.protocol)
             except ValueError as exc:
                 self.errors[url] = str(exc)
                 raise
@@ -131,16 +147,22 @@ class Browser:
             self.labels.update(page["links"])
         return self.pages[url]
 
-    def ranked(self, query, labels):
+    def ranked(self, query, labels, *, require_match=False):
         keys = terms(query)
-        return sorted(labels, key=lambda u: -len(keys & terms(labels[u] + " " + unquote(urlsplit(u).path))))[:10]
+        scores = {url: len(keys & terms(label + " " + unquote(urlsplit(url).path)))
+                  for url, label in labels.items()}
+        candidates = [url for url, score in scores.items() if score or not require_match]
+        return sorted(candidates, key=scores.get, reverse=True)[:10]
 
     def search(self, args):
         query = args.get("query")
         if not isinstance(query, str) or not query.strip():
             raise ValueError("supply a text query")
         self.load(self.root)
-        return "\n".join(f"{self.labels[u]} | {u}" for u in self.ranked(query, self.labels))
+        hits = self.ranked(query, self.labels, require_match=self.protocol != LEGACY_BROWSER)
+        if not hits:
+            return f"No matching discovered links. Browse the homepage to explore: {self.root}"
+        return "\n".join(f"{self.labels[u]} | {u}" for u in hits)
 
     def visit(self, args):
         url, goal, offset = args.get("url"), args.get("goal"), args.get("offset", 0)

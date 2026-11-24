@@ -15,7 +15,8 @@ from pace.memory import Chunk, Memory
 from pace.policy import Settings, p95
 from pace.providers import API, Utf8Counter
 from pace.records import write_result
-from .webwalkerqa import CACHE, CHAT, REVISION, ROOT, benchmark_chat, grade, load_dataset
+from .grading import LEGACY, grading_settings
+from .webwalkerqa import CACHE, CHAT, REVISION, ROOT, benchmark_chat, grade, load_dataset, saved_history
 from .webwalker_snapshot import site_tools
 
 OUT = ROOT / "results/paper-pilot"
@@ -140,7 +141,14 @@ def tools_for(snapshot, api):
     return tools
 
 
-def episode(job, config, dataset, snapshots, encoder, output, browser=None, api_factory=None):
+def question_prompt(root, question):
+    return (f"Website: {root}\nQuestion: {question}\n"
+            "Use search and visit to check the website before answering. If the pages lack "
+            "the requested information, state what is missing.")
+
+
+def episode(job, config, dataset, snapshots, encoder, output, browser=None, api_factory=None,
+            strategy_factory=None):
     rep, n, arm = job
     path = output / f"rep-{rep}/{arm}/row-{n}.json"
     row = dataset[n - 1]
@@ -157,28 +165,33 @@ def episode(job, config, dataset, snapshots, encoder, output, browser=None, api_
             root = snap["root"]
         else:
             tools = browser(root, api)
-        prompt = (f"Website: {root}\nQuestion: {row['question']}\n"
-                  "Use search and visit to check the website before answering. If the pages lack "
-                  "the requested information, state what is missing.")
+        prompt = question_prompt(root, row["question"])
         def actor(messages):
             return benchmark_chat(api, CHAT, messages, "actor")
+        cap = config["max_steps"]
+        budget = config["budget"]
         def execute(memory, settings):
-            return run(prompt, tools, actor, memory, settings, Utf8Counter(), CAP,
-                       lambda: api.last_input_tokens.get("actor"))
-        if arm == "pace":
+            return run(prompt, tools, actor, memory, settings, Utf8Counter(), cap,
+                       lambda: api.last_input_tokens.get("actor"),
+                       strategy=strategy_factory() if strategy_factory else None)
+        if arm in ("pace", "dag-pace"):
             with Memory(encoder, lambda text: api.summarize(CHAT, text)) as memory:
-                result = execute(memory, Settings(config["horizon"]))
+                result = execute(memory, Settings(config["horizon"], budget=budget,
+                                                  glimpse_limit=config.get("glimpse_limit", 3),
+                                                  guided_glimpse=config.get("guided_glimpse", False),
+                                                  pressure_power=config.get("pressure_power", 1.0),
+                                                  pressure_mode=config.get("pressure_mode", "max")))
         else:
             memory = FullHistory()
-            result = execute(memory, Settings(config["horizon"], recent=CAP + 1, glimpse_limit=0))
+            result = execute(memory, Settings(config["horizon"], budget=budget, recent=cap + 1, glimpse_limit=0))
         result.update(row=n, arm=arm, repeat=rep, question=row["question"], usage=api.usage,
                       solver_seconds=monotonic() - solver_start,
-                      history=[asdict(c.turn) for c in memory.chunks])
+                      history=saved_history(memory) if arm in ("pace", "dag-pace") else [asdict(c.turn) for c in memory.chunks])
         write_result(path, result)
     if "grade" not in result:
         judge = api_factory()
         judge_start = monotonic()
-        result["grade"] = grade(row, result["answer"], judge, CHAT)
+        result["grade"] = grade(row, result["answer"], judge, CHAT, config.get("grading_version", LEGACY))
         result["judge_seconds"] = monotonic() - judge_start
         result["usage"].update(judge.usage)
         write_result(path, result)
@@ -192,6 +205,7 @@ def main():
     args = parser.parse_args()
     config, rows, snapshots = prepare()
     path = args.out / "config.json"
+    config.update(grading_settings(path))
     if path.exists() and json.loads(path.read_text()) != config:
         raise ValueError("output directory belongs to another run")
     write_result(path, config)

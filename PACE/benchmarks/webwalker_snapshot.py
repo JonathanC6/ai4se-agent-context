@@ -75,8 +75,10 @@ class PageParser(HTMLParser):
         if self.stack and self.stack[-1][0] == "title":
             self.title.append(text)
 
-    def page(self, url):
-        text = "".join(self.main or self.parts)
+    def page(self, url, *, fallback_empty=True):
+        text = "".join(self.main)
+        if not self.main or (fallback_empty and not text.strip()):
+            text = "".join(self.parts)
         lines = [" ".join(line.split()) for line in text.splitlines()]
         return {"url": url, "title": " ".join("".join(self.title).split()) or url,
                 "text": "\n".join(line for line in lines if line)}

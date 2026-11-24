@@ -61,3 +61,13 @@ export PYTHONPATH=src
 可用 `--repeats 3` 追加第二、三轮，或用 `--arms pace react` 加入配对基线。每题从官方入口起步，search 对已发现的站内链接排序，visit 读取并按目标提取网页，支持继续发现链接。成功读取的页面在本机缓存。本模式的站内导航与论文的 Google + You.com 工具不同；网页版本也会影响得分。模型、步数上限、BGE 编码及上下文参数沿用六题试跑。
 
 `results/webwalkerqa-full/` 保存入口检查、逐题答案、轨迹、用量和裁判结果。模型或裁判中断的题可用原命令续跑；访问错误保存在工具观察里，每轮收齐 680 个判分才输出全量准确率。试跑的六题结果独立保存。
+
+新实验默认使用 `semantic-v2` 评分。独立的中英文日期可以直接比对，例如“三月十四日”和“It is March 14th.”。其余答案由裁判逐项核对题目要求，接受等义翻译、同义表达和相容的补充信息。每个判分记录带有版本。已有实验目录沿用原裁判口径。
+
+完整 main 的新实验使用 `full-live-v2` 浏览工具。搜索只返回有词项匹配的链接，访问页面仍可浏览导航链接。HTML 主区只有空白时会回退到可见文本。要在同一台机器上建立独立实验，在 `webwalker_full run` 和 `report` 后传入相同的新目录，例如 `--out results/webwalkerqa-v2`。旧目录继续使用 v1 浏览缓存与行为。新保存的 PACE 轨迹按块记录摘要正文，结合每步的 `shown` 可还原当时展示的块。
+
+固定 20 题的 ReAct 自主浏览实验增加了历史快照与 PDF 读取，保留逐题答案、网页访问及模型用量。[运行方法与配对结果](experiments/webwalker-archive20.md)
+
+固定 20 题的动态搜索、16K 实验使用本地预训练 BGE-M3（INT8 ONNX，1024 维）。标准压力倍率为 `1 + 0.5 * P`。要在已有轨迹上核对平方变体 `1 + 0.5 * P²` 如何改变实际展示的块，在 `PACE/` 下运行 `PYTHONPATH=src .venv/bin/python -m benchmarks.replay_pressure`，无需 API。单任务入口也支持 `--pressure-power 2`。
+
+要验证“步数多、窗口仍空”的情况，可用 `PYTHONPATH=src .venv/bin/python -m benchmarks.replay_pressure --variant occupancy` 免费回放已有轨迹。端到端实验入口为 `benchmarks.webwalker_budget20 --groups pace-occupancy --rows 1 48`，使用与标准组相同的 Labhuan 配置及动态搜索服务。单任务入口支持 `--pressure-mode occupancy`。

@@ -5,13 +5,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import fcntl
 import json
 import threading
+from pathlib import Path
 from time import monotonic, sleep
 
 from pace.records import write_result
 from pace.providers import API, ProviderError, json_object
 from .full_webwalker_preflight import OUT
 from .paper_pilot import CAP, ENCODER, DenseEncoder, episode
-from .webwalker_live import Browser, hostname
+from .grading import grading_settings
+from .webwalker_live import Browser, CURRENT_BROWSER, LEGACY_BROWSER, hostname, received_page_text
 from .webwalkerqa import CACHE, CHAT, DATA_SHA, REVISION, load_dataset
 
 
@@ -64,12 +66,13 @@ class FullRunAPI(API):
         choice = (result.get("choices") or [{}])[0]
         line = {"job": self.job, "role": purpose, "finish_reason": choice.get("finish_reason"),
                 **{k: usage.get(k, 0) for k in ("prompt_tokens","completion_tokens","total_tokens")}}
-        with self.journal_lock, (OUT / "usage.jsonl").open("a") as f:
+        with self.journal_lock, (self.output / "usage.jsonl").open("a") as f:
             f.write(json.dumps(line) + "\n")
         return result
 
 
-def report(dataset, config):
+def report(dataset, config, output=None):
+    output = OUT if output is None else output
     totals = []
     for rep in range(1, config["repeats"] + 1):
         for arm in config["arms"]:
@@ -77,7 +80,7 @@ def report(dataset, config):
             tokens = Counter()
             types = Counter()
             for n, row in enumerate(dataset, 1):
-                path = OUT / f"rep-{rep}/{arm}/row-{n}.json"
+                path = output / f"rep-{rep}/{arm}/row-{n}.json"
                 if not path.exists():
                     continue
                 record = json.loads(path.read_text())
@@ -88,8 +91,7 @@ def report(dataset, config):
                 counts["correct"] += grade
                 counts["steps"] += len(record["steps"])
                 counts["tool_error_cases"] += any(t["observation"].startswith("Tool error:") for t in record["history"])
-                counts["no_successful_visit"] += not any(t["kind"] == "visit" and not t["observation"].startswith("Tool error:")
-                                                       for t in record["history"])
+                counts["no_successful_visit"] += not any(received_page_text(t) for t in record["history"])
                 counts[record["status"]] += 1
                 types[row["info"]["type"]] += grade
                 for role, usage in record["usage"].items():
@@ -97,7 +99,7 @@ def report(dataset, config):
             full = counts["graded"] == len(dataset)
             totals.append(dict(repeat=rep, arm=arm, counts=counts, correct_by_type=types, tokens=tokens,
                                missing=len(dataset)-counts["graded"], accuracy=counts["correct"]/len(dataset) if full else None))
-    write_result(OUT / "summary.json", totals)
+    write_result(output / "summary.json", totals)
     return totals
 
 
@@ -107,24 +109,33 @@ def main():
     parser.add_argument("--arms", nargs="+", choices=["pace", "react"], default=["pace"])
     parser.add_argument("--repeats", type=int, choices=[1, 3], default=1)
     parser.add_argument("--jobs", type=int, default=6)
+    parser.add_argument("--out", type=Path, default=OUT)
     args = parser.parse_args()
+    output = args.out
     dataset = load_dataset(CACHE)
     if len(dataset) != 680 or args.jobs < 1 or len(set(args.arms)) != len(args.arms):
         parser.error("invalid split, job count or duplicate arms")
-    cfg = OUT / "config.json"
+    cfg = output / "config.json"
     if args.command == "report":
-        print(report(dataset, json.loads(cfg.read_text())))
+        print(report(dataset, json.loads(cfg.read_text()), output))
         return
-    OUT.mkdir(parents=True, exist_ok=True)
-    lock = (OUT / "run.lock").open("a")
+    output.mkdir(parents=True, exist_ok=True)
+    lock = (output / "run.lock").open("a")
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    probes = json.loads((OUT / "preflight.json").read_text())["probes"]
+    preflight = output / "preflight.json"
+    if not preflight.exists():
+        preflight = OUT / "preflight.json"
+    probes = json.loads(preflight.read_text())["probes"]
     sites = {root: sorted({hostname(root), hostname(p.get("url", root))}) for root,p in probes.items()}
-    config = dict(protocol="full-live-v1", dataset=REVISION, sha256=DATA_SHA, model=CHAT,
+    old = json.loads(cfg.read_text()) if cfg.exists() else None
+    protocol = old["protocol"] if old else CURRENT_BROWSER
+    if protocol not in (LEGACY_BROWSER, CURRENT_BROWSER):
+        raise ValueError("unknown saved browser protocol")
+    config = dict(protocol=protocol, dataset=REVISION, sha256=DATA_SHA, model=CHAT,
                   encoder=ENCODER, horizon=16, budget=128000, max_steps=CAP, temperature=0,
                   roots=sites, arms=args.arms, repeats=args.repeats)
-    if cfg.exists():
-        old = json.loads(cfg.read_text())
+    config.update(grading_settings(cfg))
+    if old is not None:
         # 首轮完成后允许追加重复和对照组；已有轨迹的工具与参数必须相同。
         if any(config[k] != old[k] for k in config if k not in ("arms", "repeats")):
             raise ValueError("protocol changed; use a separate output directory")
@@ -137,19 +148,20 @@ def main():
         rep, n, arm = job
         started = monotonic()
         def browser(root, api):
-            return Browser(root, api, sites[root]).tools()
+            return Browser(root, api, sites[root], protocol).tools()
         def api_factory():
             api = FullRunAPI.configured()
             api.job = job
+            api.output = output
             return api
-        result = episode(job, config, dataset, None, encoder, OUT, browser=browser, api_factory=api_factory)
+        result = episode(job, config, dataset, None, encoder, output, browser=browser, api_factory=api_factory)
         print(*result, f"{monotonic()-started:.1f}s", flush=True)
 
     jobs = []
     for rep in range(1,args.repeats+1):
         for n in range(1,len(dataset)+1):
             for arm in args.arms:
-                path = OUT / f"rep-{rep}/{arm}/row-{n}.json"
+                path = output / f"rep-{rep}/{arm}/row-{n}.json"
                 if not path.exists() or "grade" not in json.loads(path.read_text()):
                     jobs.append((rep,n,arm))
     failures = []
@@ -161,10 +173,10 @@ def main():
             except Exception as exc:
                 job = pending[task]
                 failures.append({"job":job, "error":str(exc)})
-                write_result(OUT / "incomplete.json", failures)
+                write_result(output / "incomplete.json", failures)
                 print("incomplete", job, str(exc), flush=True)
-    write_result(OUT / "incomplete.json", failures)
-    print(report(dataset, config))
+    write_result(output / "incomplete.json", failures)
+    print(report(dataset, config, output))
     if failures:
         raise SystemExit("incomplete API jobs; resume with the same command")
 

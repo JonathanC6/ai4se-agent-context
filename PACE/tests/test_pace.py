@@ -68,6 +68,23 @@ class PaperPolicyTests(unittest.TestCase):
             builder.build()
             self.assertEqual(len(calls), 6)
 
+    def test_quadratic_pressure_keeps_paper_endpoints(self):
+        paper = Settings(16)
+        quadratic = Settings(16, pressure_power=2)
+        for p in (0, 1):
+            self.assertEqual(quadratic.boundaries(p), paper.boundaries(p))
+        self.assertEqual(paper.level(.95, paper.boundaries(.5)), Level.BRIEF)
+        self.assertEqual(quadratic.level(.95, quadratic.boundaries(.5)), Level.DETAILED)
+        with self.assertRaises(ValueError):
+            Settings(16, pressure_power=0)
+
+    def test_occupancy_limits_progress_pressure(self):
+        cfg = Settings(10, budget=1000, pressure_mode="occupancy")
+        self.assertAlmostEqual(cfg.pressure(10, 100), .19)
+        self.assertEqual(cfg.pressure(10, 0), 0)
+        self.assertEqual(cfg.pressure(2, 900), .9)
+        self.assertEqual(cfg.pressure(12, 1100), 1)
+
     def test_pending_summary_falls_back_without_blocking(self):
         finish = threading.Event()
         def blocked(_):

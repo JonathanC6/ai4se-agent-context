@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from .full_webwalker_preflight import OUT
+from .webwalker_live import received_page_text
 from .webwalkerqa import CACHE, ROOT, load_dataset
 
 ARMS = ("react", "pace")
@@ -11,14 +12,12 @@ ARMS = ("react", "pace")
 
 def compact(record):
     history = record["history"]
-    visits = [t["observation"] for t in history if t["kind"] == "visit"]
     usage = record["usage"].values()
     return {
         "correct": record["grade"]["correct"],
         "status": record["status"],
         "steps": len(record["steps"]),
-        "evidence": any(" chars " in v and "\nDiscovered links:" in v and
-                        not v.startswith("Tool error:") for v in visits),
+        "evidence": any(received_page_text(t) for t in history),
         "tool_error": any(t["observation"].startswith("Tool error:") for t in history),
         "compressed": any(c["shown"] != "FULL" for s in record["steps"] for c in s["chunks"]),
         "glimpse": record["glimpse_calls"],
