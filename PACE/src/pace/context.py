@@ -62,7 +62,7 @@ class Builder:
         self.system, self.query = system, query
         self.memory, self.settings, self.counter = memory, settings, counter
         self.previous_tokens = counter.messages(self.messages([]))
-        self.trace_window = trace_window or settings.pressure_mode == "window" or settings.compression_start_ratio is not None
+        self.trace_window = trace_window or settings.pressure_mode in ("window", "evidence-v2") or settings.compression_start_ratio is not None
         self.previous_blocks = {}
         self.activation_step = None
         self.first_organization_step = None
@@ -114,7 +114,7 @@ class Builder:
         if self.trace_window:
             self.last_window = self.measure_window(chunks, len(old), step)
         ratio = self.settings.compression_start_ratio
-        pressure_tokens = (self.last_window["current_input_estimate"] if self.settings.pressure_mode == "window"
+        pressure_tokens = (self.last_window["current_input_estimate"] if self.settings.pressure_mode in ("window", "evidence-v2")
                            else self.previous_tokens)
         if ratio is not None and self.last_window["phase"] != "multilevel":
             # 触发当步采用基础阈值；之后即使窗口回落也继续分档。

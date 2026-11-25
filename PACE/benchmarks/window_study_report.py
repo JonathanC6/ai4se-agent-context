@@ -54,6 +54,10 @@ def verify_requests(record, events, cfg):
         if step["input_count_error"] != step["input_tokens_estimate"] - step["input_tokens_actual"]:
             raise ValueError("invalid input count error")
     oversize = [a for a in attempts if a["prompt_tokens"] > cfg["provider_input_budget"]]
+    if not cfg.get("enforce_provider_budget", True):
+        if record.get("error") == "provider token count exceeded input budget":
+            raise ValueError("record-only gateway limit stopped the episode")
+        return "local_window" if record["status"] == "budget_exceeded" else None
     if oversize and (oversize != attempts[-1:] or record["status"] != "budget_exceeded"
                      or len(record["history"]) != oversize[0]["step"] - 1):
         raise ValueError("an over-budget response was used or retried")

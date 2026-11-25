@@ -1,0 +1,61 @@
+{
+  "dataset": "c7ab3329a2a4a35ca569fdca369b61a3d1787e5b",
+  "sha256": "cbe95d9de714ef52fe4a9ddf160dfab462407cb1ba526f1c31b4305ca32c34cb",
+  "rows": [
+    1,
+    2,
+    9,
+    15,
+    20,
+    21,
+    24,
+    25,
+    26,
+    27,
+    30,
+    33,
+    39,
+    40,
+    47,
+    48,
+    59,
+    115,
+    157,
+    407
+  ],
+  "model": "claude-sonnet-4-6",
+  "summary_model": "claude-sonnet-4-6",
+  "encoder": "Xenova/bge-m3@4de13258303883538bd53b696b452bf8099f0858",
+  "temperature": 0,
+  "max_steps": 24,
+  "horizon": 16,
+  "budget": 6000,
+  "provider_input_budget": 80000,
+  "workload": "window-study-v1",
+  "grading_version": "legacy-v1",
+  "token_counter": "labhuan-visible-v1",
+  "actor_budget_protocol": "per-response-v2",
+  "protocol": "research-web-v1",
+  "search_backend": "public-web-search",
+  "reader": "you-free+archive",
+  "search_limit": 10,
+  "row_replacements": [
+    [
+      32,
+      115
+    ],
+    [
+      42,
+      157
+    ],
+    [
+      50,
+      407
+    ]
+  ],
+  "arms": [
+    "react"
+  ],
+  "pressure_mode": "max",
+  "compression_start_ratio": null
+}

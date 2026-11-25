@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .context import BudgetExceeded, Builder
-from .evidence import review_request, source_args
+from .evidence import check_draft, evidence_index, review_request, source_args
+from .providers.api import ProviderError
 from .memory import Turn
 
 
@@ -39,7 +40,7 @@ def instructions(tools, glimpse_limit, guided_glimpse=False):
 
 
 def run(query, tools, actor, memory, settings, counter, max_steps, actual_input_tokens=None, strategy=None,
-        last_actor_messages=None, provider_input_budget=None):
+        last_actor_messages=None, provider_input_budget=None, coverage_check=None, enforce_provider_budget=True):
     if max_steps < 1:
         raise ValueError("max_steps must be positive")
     if provider_input_budget is not None and (type(provider_input_budget) is not int or provider_input_budget < 1):
@@ -80,21 +81,35 @@ def run(query, tools, actor, memory, settings, counter, max_steps, actual_input_
             # 独立网关上限下，组织上下文的压力与可见预算使用同一个计量口径。
             builder.previous_tokens = actual if provider_input_budget is None else trace["input_tokens_estimate"]
             trace["input_tokens_actual"] = actual
+        if coverage_check:
+            trace["can_glimpse"] = any(r.shown.name != "FULL" for r in context.selections)
         trace["action"] = reply
         result["steps"].append(trace)
-        if type(actual) is int and actual > provider_limit:
+        if enforce_provider_budget and type(actual) is int and actual > provider_limit:
             result.update(status="budget_exceeded", error="provider token count exceeded input budget")
             break
         if name == "finish" and isinstance(args, dict) and isinstance(args.get("answer"), str) and args["answer"].strip():
             review = None
-            if "reread" in tools and not reviewed and len(result["steps"]) < max_steps:
+            if coverage_check and not reviewed and len(result["steps"]) < max_steps:
+                index = evidence_index(context)
+                trace["coverage"] = {"status": "no_target", "candidates": len(index)}
+                if index:
+                    try:
+                        choice = check_draft(query, args, index, coverage_check)
+                        trace["coverage"]["status"] = "recover" if choice else "submit"
+                        if choice:
+                            review = choice[:2]
+                            trace["coverage"]["goal"] = choice[2]
+                    except (ProviderError, ValueError) as exc:
+                        trace["coverage"].update(status="check_failed", error=str(exc)[:200])
+            elif not coverage_check and "reread" in tools and not reviewed and len(result["steps"]) < max_steps:
                 review = review_request(args, context, settings.glimpse_limit)
             if review is None:
                 result.update(status="finished", answer=args["answer"])
                 break
             name, args = review
             reviewed = True
-            note = "Verify the declared missing fact before submitting."
+            note = "Verify before submitting: " + trace.get("coverage", {}).get("goal", "declared missing fact")
             trace["evidence_review"] = {"tool": name, "args": args}
         try:
             if not isinstance(args, dict) or not isinstance(name, str):
@@ -113,6 +128,9 @@ def run(query, tools, actor, memory, settings, counter, max_steps, actual_input_
             observation = f"Tool error: {exc}"
         if not isinstance(observation, str):
             raise TypeError("a tool must return text")
+        if coverage_check and name in ("glimpse", "reread"):
+            trace["recovery"] = dict(tool=name, trigger="automatic" if "evidence_review" in trace else "actor",
+                                     ok=not observation.startswith("Tool error:"))
         action = json.dumps({"tool": name, "args": args}, ensure_ascii=False, sort_keys=True)
         turn = Turn(note if isinstance(note, str) else "", action, observation,
                     name if isinstance(name, str) and name in {*tools, "glimpse"} else "invalid")

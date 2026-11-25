@@ -103,11 +103,11 @@ class ResearchReader(ArchiveBrowser):
 
 
 class ResearchBrowser(DynamicBrowser):
-    def __init__(self, root, api, n, output):
+    def __init__(self, root, api, n, output, *, rank_rereads=False):
         super().__init__(root, api, n, output)
         keys = optional_credentials()
         self.google = PaperBrowser(api, keys) if keys[0] else None
-        self.evidence = SourceEvidence(api, output / "sources")
+        self.evidence = SourceEvidence(api, output / "sources", rank_rereads=rank_rereads)
         self.backend = ResearchReader(api, n, output, keys, self.evidence)
 
     def search_one(self, query):

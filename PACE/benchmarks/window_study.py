@@ -1,4 +1,4 @@
-"""同一可见上下文预算下，分三步检验压力公式和延迟压缩。"""
+"""Legacy 窗口消融入口。新版固定 20 题使用 benchmarks.evidence_v2。"""
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path

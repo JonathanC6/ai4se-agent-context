@@ -30,6 +30,21 @@ def event(index, actual):
 class StrictBudgetTests(unittest.TestCase):
     prompt = [{"role": "system", "content": "json"}, {"role": "user", "content": "q"}]
 
+    def test_observe_gateway_retries_and_executes_over_reference_but_keeps_local_cap(self):
+        api = MockAPI([(200000, "malformed"), (215000, '{"tool":"finish","args":{"answer":"done"}}')])
+        counter = Utf8Counter()
+        actor = BudgetedActor(api, "mock", counter, 4000, 80000, enforce_provider_budget=False)
+        record = run("q", {}, actor, FullHistory(), Settings(20, budget=4000), counter, 1,
+                     lambda: api.last_input_tokens["actor"], provider_input_budget=80000,
+                     enforce_provider_budget=False)
+        self.assertEqual(record["answer"], "done")
+        self.assertEqual(record["steps"][0]["input_tokens_actual"], 215000)
+        self.assertEqual([log["format_attempt"] for log, _ in api.calls], [1, 2])
+        tiny = BudgetedActor(api, "mock", counter, 1, 80000, enforce_provider_budget=False)
+        with self.assertRaises(BudgetExceeded):
+            tiny(self.prompt)
+        self.assertEqual(len(api.calls), 2)
+
     def test_local_visible_and_provider_budgets_are_enforced_separately(self):
         api = MockAPI([(4000, '{"tool":"finish"}'), (4001, "invalid JSON")])
         actor = BudgetedActor(api, "mock", Utf8Counter(), 1000, provider_input_budget=4000)

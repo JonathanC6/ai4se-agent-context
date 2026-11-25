@@ -8,7 +8,8 @@ PROTOCOL = "per-response-v2"
 
 
 class BudgetedActor:
-    def __init__(self, api, model, counter, budget, provider_input_budget=None):
+    def __init__(self, api, model, counter, budget, provider_input_budget=None, *, enforce_provider_budget=True):
+        self.enforce_provider_budget = enforce_provider_budget
         self.api, self.model = api, model
         self.counter, self.budget = counter, budget
         self.provider_input_budget = budget if provider_input_budget is None else provider_input_budget
@@ -26,6 +27,7 @@ class BudgetedActor:
             self.last_messages = current
             self.api.actor_log = dict(episode_id=self.episode_id, decision_step=self.step,
                                       format_attempt=attempt, input_tokens_estimate=estimate)
-            return self.api.chat(self.model, current, "actor", max_tokens=max_tokens, input_budget=self.provider_input_budget)
+            return self.api.chat(self.model, current, "actor", max_tokens=max_tokens,
+                                 input_budget=self.provider_input_budget, enforce_input_budget=self.enforce_provider_budget)
 
         return chat_with_retry(request, messages, "actor")

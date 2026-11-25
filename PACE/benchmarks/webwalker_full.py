@@ -3,6 +3,7 @@ import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import fcntl
+import hashlib
 import json
 import threading
 from pathlib import Path
@@ -69,6 +70,10 @@ class FullRunAPI(API):
                 **{k: usage.get(k, 0) for k in ("prompt_tokens","completion_tokens","total_tokens")}}
         if purpose == "actor" and hasattr(self, "actor_log"):
             line.update(self.actor_log)
+            serialized = json.dumps(body["messages"], ensure_ascii=False, separators=(",", ":"))
+            line.update(message_chars=sum(len(m["content"]) for m in body["messages"]),
+                        messages_sha256=hashlib.sha256(serialized.encode()).hexdigest(),
+                        response_id=result.get("id"), requested_model=body["model"])
             details = usage.get("prompt_tokens_details")
             if isinstance(details, dict):
                 # 缓存读写是 prompt_tokens 的分项，账单总计只加服务端 total_tokens。

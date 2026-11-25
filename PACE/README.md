@@ -4,6 +4,23 @@ PACE 在每次调用 agent 前，决定哪些历史交互需要全文、详细�
 
 ![PACE 的决策与记忆循环](docs/architecture.png)
 
+## 新版 WebWalkerQA 实验
+
+固定 20 题中，ReAct 答对 6 题，标准 PACE 答对 10 题，新版 PACE 在网关用量仅记录时答对 7 题，沿用网关上限时答对 2 题。新版在全文达到预算的 90% 时开始分档，使用校准后的 `horizon=20`，并在提交前检查证据，按需恢复历史块或重读已访问的网页。[逐题结果与三组对照](../WebWalkerQA新版PACE证据恢复实验.md)
+
+从 `PACE/` 下运行。下文“在线对照实验”给出了模型文件与依赖安装步骤。动作模型使用 Labhuan Claude Sonnet 4.6。题单和历史 ReAct 配置随仓库提供。该题单使用公开搜索后端；新查询通过 `benchmarks.webwalker_dynamic20 pending` 列出，`answer` 从标准输入接收搜索结果，相同查询复用本地缓存。
+
+```sh
+export PYTHONPATH=src
+.venv/bin/python -m benchmarks.evidence_v2 --observe-gateway --jobs 6
+```
+
+默认每步发送前检查 6,000 token，响应后按 80,000 的网关输入上限停止。`--observe-gateway` 保留发送前预检和逐请求计量，允许超出网关参考线后继续解析动作。两种模式分别写入 `results/webwalker-evidence-v2/` 和 `results/webwalker-evidence-v2-observe/`。有两轮归档的机器可执行以下命令离线复算，原始轨迹和调用流水保存在实验机器上。
+
+```sh
+PYTHONPATH=src .venv/bin/python -m benchmarks.evidence_v2_report --observe-gateway
+```
+
 ## 快速运行
 
 在 `PACE/` 下执行。离线示例只需 Python 标准库。下面的在线实验在 Python 3.12 上运行。托管版从环境变量 `PACE_API_KEY` 或本机私有的 `.local.json` 读取凭据，默认地址为 `https://api.labhuan.com/v1`。

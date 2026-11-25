@@ -8,6 +8,7 @@ from tempfile import NamedTemporaryFile
 
 from pace.agent import Tool
 from .paper_pilot import extract_page
+from .webwalker_live import terms
 
 
 @dataclass(frozen=True)
@@ -19,7 +20,8 @@ class Source:
 
 
 class SourceEvidence:
-    def __init__(self, api, directory=None):
+    def __init__(self, api, directory=None, *, rank_rereads=False):
+        self.rank_rereads = rank_rereads
         self.api = api
         self.directory = directory
         self.sources = {}
@@ -51,7 +53,7 @@ class SourceEvidence:
         if not isinstance(goal, str) or not goal.strip():
             raise ValueError("supply a specific missing fact as goal")
         src = self.sources[sid]
-        start = args.get("offset", src.start)
+        start = args.get("offset", 0 if self.rank_rereads else src.start)
         if type(start) is not int or not 0 <= start < len(src.text):
             raise ValueError("offset outside source text")
         find = args.get("find")
@@ -64,6 +66,13 @@ class SourceEvidence:
             if not match:
                 raise ValueError("literal phrase not found; try another phrase or an offset")
             start = max(0, match.start() - 240)
+        elif self.rank_rereads and "offset" not in args and len(src.text) > 24000:
+            # 先定位较短段落，避免整页共有的词让多个长窗口同分。
+            keys = terms(goal) - {"the", "and", "for", "from", "what", "which", "with", "that", "was", "were"}
+            positions = range(0, len(src.text), 800)
+            best = max(positions, key=lambda i: len(keys & terms(src.text[i:i + 1600])))
+            if keys & terms(src.text[best:best + 1600]):
+                start = max(0, min(best - 1200, len(src.text) - 24000))
         key = (sid, goal.strip(), start)
         if key not in self.cache:
             end = min(start + 24000, len(src.text))

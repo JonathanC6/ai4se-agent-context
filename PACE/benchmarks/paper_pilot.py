@@ -184,15 +184,23 @@ def episode(job, config, dataset, snapshots, encoder, output, browser=None, api_
         if strict not in (None, STRICT_BUDGET):
             raise ValueError("unknown actor budget protocol")
         provider_budget = config.get("provider_input_budget")
-        guarded = BudgetedActor(api, CHAT, counter, budget, provider_budget) if strict else None
+        enforce = config.get("enforce_provider_budget", True)
+        guarded = BudgetedActor(api, CHAT, counter, budget, provider_budget, enforce_provider_budget=enforce) if strict else None
+        revised = config.get("method") == "evidence-v2"
+        if (config.get("pressure_mode") == "evidence-v2") != revised:
+            raise ValueError("pressure and method version differ")
+        if revised and (arm != "pace" or config.get("pressure_mode") != "evidence-v2" or not config.get("guided_glimpse")):
+            raise ValueError("inconsistent evidence-v2 configuration")
         def execute(memory, settings):
             return run(prompt, tools, guarded or actor, memory, settings, counter, cap,
                        lambda: api.last_input_tokens.get("actor"),
                        strategy=strategy_factory() if strategy_factory else None,
                        last_actor_messages=(lambda: guarded.last_messages) if guarded else None,
-                       provider_input_budget=provider_budget)
+                       provider_input_budget=provider_budget, enforce_provider_budget=enforce,
+                       coverage_check=(lambda msgs: benchmark_chat(api, CHAT, msgs, "coverage")) if revised else None)
         if arm in ("pace", "dag-pace"):
-            with Memory(encoder, lambda text: api.summarize(CHAT, text)) as memory:
+            summarize = (lambda text: api.summarize(CHAT, text, evidence=True)) if revised else (lambda text: api.summarize(CHAT, text))
+            with Memory(encoder, summarize) as memory:
                 result = execute(memory, Settings(config["horizon"], budget=budget,
                                                   glimpse_limit=config.get("glimpse_limit", 3),
                                                   guided_glimpse=config.get("guided_glimpse", False),
