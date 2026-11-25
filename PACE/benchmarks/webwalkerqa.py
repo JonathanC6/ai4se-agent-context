@@ -23,6 +23,7 @@ DATA_URL = f"https://huggingface.co/datasets/callanwu/WebWalkerQA/resolve/{REVIS
 PILOT_SITE = "https://2023.aclweb.org/"
 CHAT = "claude-sonnet-4-6"
 EMBED = "GLM-Embedding-3"
+FORMAT_REMINDER = "\nEmit only one valid JSON object. No Markdown or preamble. Keep strings concise."
 
 
 def load_dataset(cache):
@@ -54,13 +55,19 @@ def select_rows(rows, root, numbers):
 
 
 def benchmark_chat(api, model, messages, purpose):
+    def request(current, attempt, max_tokens):
+        return api.chat(model, current, purpose, max_tokens=max_tokens)
+    return chat_with_retry(request, messages, purpose)
+
+
+def chat_with_retry(request, messages, purpose):
     try:
-        return api.chat(model, messages, purpose, max_tokens=1600)
+        return request(messages, 1, 1600)
     except ReplyFormatError:
         print(f"  {purpose}: retrying malformed JSON", flush=True)
         system = dict(messages[0])
-        system["content"] += "\nEmit only one valid JSON object. No Markdown or preamble. Keep strings concise."
-        return api.chat(model, [system, *messages[1:]], purpose, max_tokens=2400)
+        system["content"] += FORMAT_REMINDER
+        return request([system, *messages[1:]], 2, 2400)
 
 
 def solve(question, root, tools, api, config, strategy=None):

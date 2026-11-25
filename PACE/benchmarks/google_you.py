@@ -13,11 +13,16 @@ from .paper_pilot import extract_page
 from .webwalkerqa import ROOT
 
 
-def credentials():
+def optional_credentials():
     path = ROOT / ".local.json"
     local = json.loads(path.read_text()) if path.exists() else {}
     search = os.getenv("SERPER_API_KEY") or local.get("serper_api_key")
     contents = os.getenv("YDC_API_KEY") or local.get("you_api_key")
+    return search, contents
+
+
+def credentials():
+    search, contents = optional_credentials()
     missing = [k for k, v in [("SERPER_API_KEY", search), ("YDC_API_KEY", contents)] if not v]
     if missing:
         raise SystemExit("缺少网页服务凭据 " + ", ".join(missing))

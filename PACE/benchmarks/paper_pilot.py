@@ -14,7 +14,9 @@ from pace.agent import Tool, run
 from pace.memory import Chunk, Memory
 from pace.policy import Settings, p95
 from pace.providers import API, Utf8Counter
+from pace.providers.encoding import LabhuanCounter, VisibleWindowCounter, load_count_tokenizer
 from pace.records import write_result
+from .actor_budget import BudgetedActor, PROTOCOL as STRICT_BUDGET
 from .grading import LEGACY, grading_settings
 from .webwalkerqa import CACHE, CHAT, REVISION, ROOT, benchmark_chat, grade, load_dataset, saved_history
 from .webwalker_snapshot import site_tools
@@ -170,20 +172,38 @@ def episode(job, config, dataset, snapshots, encoder, output, browser=None, api_
             return benchmark_chat(api, CHAT, messages, "actor")
         cap = config["max_steps"]
         budget = config["budget"]
+        count_method = config.get("token_counter", "utf8")
+        counters = {c.method: c for c in (LabhuanCounter, VisibleWindowCounter)}
+        if count_method in counters:
+            counter = counters[count_method](load_count_tokenizer(ASSETS / "tokenizer.json"))
+        elif count_method == "utf8":
+            counter = Utf8Counter()
+        else:
+            raise ValueError("unknown actor input token counter")
+        strict = config.get("actor_budget_protocol")
+        if strict not in (None, STRICT_BUDGET):
+            raise ValueError("unknown actor budget protocol")
+        provider_budget = config.get("provider_input_budget")
+        guarded = BudgetedActor(api, CHAT, counter, budget, provider_budget) if strict else None
         def execute(memory, settings):
-            return run(prompt, tools, actor, memory, settings, Utf8Counter(), cap,
+            return run(prompt, tools, guarded or actor, memory, settings, counter, cap,
                        lambda: api.last_input_tokens.get("actor"),
-                       strategy=strategy_factory() if strategy_factory else None)
+                       strategy=strategy_factory() if strategy_factory else None,
+                       last_actor_messages=(lambda: guarded.last_messages) if guarded else None,
+                       provider_input_budget=provider_budget)
         if arm in ("pace", "dag-pace"):
             with Memory(encoder, lambda text: api.summarize(CHAT, text)) as memory:
                 result = execute(memory, Settings(config["horizon"], budget=budget,
                                                   glimpse_limit=config.get("glimpse_limit", 3),
                                                   guided_glimpse=config.get("guided_glimpse", False),
                                                   pressure_power=config.get("pressure_power", 1.0),
-                                                  pressure_mode=config.get("pressure_mode", "max")))
+                                                  pressure_mode=config.get("pressure_mode", "max"),
+                                                  compression_start_ratio=config.get("compression_start_ratio")))
         else:
             memory = FullHistory()
             result = execute(memory, Settings(config["horizon"], budget=budget, recent=cap + 1, glimpse_limit=0))
+        if guarded:
+            result["actor_episode_id"] = guarded.episode_id
         result.update(row=n, arm=arm, repeat=rep, question=row["question"], usage=api.usage,
                       solver_seconds=monotonic() - solver_start,
                       history=saved_history(memory) if arm in ("pace", "dag-pace") else [asdict(c.turn) for c in memory.chunks])

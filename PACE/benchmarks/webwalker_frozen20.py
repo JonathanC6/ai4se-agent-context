@@ -107,7 +107,8 @@ def main():
     run_cohort(rows, config, output, args.jobs, make_browser)
 
 
-def run_cohort(rows, config, output, jobs, make_browser, *, encoder=None, strategy_factory=None):
+def run_cohort(rows, config, output, jobs, make_browser, *, encoder=None, strategy_factory=None,
+               selected_rows=None):
     arm, = config["arms"]
     if arm not in ("react", "pace", "dag-pace") or (arm != "react") != (encoder is not None):
         raise ValueError("encoder and arm mismatch")
@@ -130,7 +131,10 @@ def run_cohort(rows, config, output, jobs, make_browser, *, encoder=None, strate
             return episode(job, config, rows, None, encoder, output, tools, api_factory,
                            strategy_factory=strategy_factory)
         with ThreadPoolExecutor(jobs) as pool:
-            futures = {pool.submit(one, n): n for n in config["rows"]}
+            scheduled = config["rows"] if selected_rows is None else selected_rows
+            if not set(scheduled) <= set(config["rows"]):
+                raise ValueError("selected row outside the saved cohort")
+            futures = {pool.submit(one, n): n for n in scheduled}
             failed = []
             for future in as_completed(futures):
                 try:

@@ -2,6 +2,7 @@
 import hashlib
 import math
 import re
+from functools import lru_cache
 
 from .api import EmbeddingInputError, ProviderError
 
@@ -34,6 +35,55 @@ class Utf8Counter:
 
     def messages(self, messages):
         return 32 + sum(16 + self.text(m["content"]) for m in messages)
+
+
+@lru_cache(maxsize=2)
+def load_count_tokenizer(path):
+    from tokenizers import Tokenizer
+    codec = Tokenizer.from_file(str(path))
+    # 预算覆盖完整请求，不能套用 embedding 模型的 8192 截断长度。
+    codec.no_truncation()
+    codec.no_padding()
+    return codec
+
+
+class VisibleWindowCounter:
+    """用固定子词折算和消息开销测量可见输入，跨运行使用同一把尺。"""
+    method = "labhuan-visible-v1"
+
+    def __init__(self, codec, scale=0.851, framing=646):
+        self.codec = codec
+        self.scale = scale
+        self.framing = framing
+
+    def text(self, text):
+        return round(self.scale * len(self.codec.encode(text, add_special_tokens=False).ids))
+
+    def base(self, messages):
+        return self.framing + sum(self.text(m["content"]) for m in messages)
+
+    def messages(self, messages):
+        return self.base(messages)
+
+    def observe(self, messages, actual):
+        if type(actual) is not int or actual < 1:
+            raise ProviderError("actor: missing valid provider input token count")
+
+
+class LabhuanCounter(VisibleWindowCounter):
+    """历史协议额外使用同题上一步的网关计量残差校正下一步。"""
+    method = "labhuan-calibrated-v1"
+
+    def __init__(self, codec, scale=0.851, framing=646):
+        super().__init__(codec, scale, framing)
+        self.residual = 0
+
+    def messages(self, messages):
+        return max(1, self.base(messages) + self.residual)
+
+    def observe(self, messages, actual):
+        super().observe(messages, actual)
+        self.residual = actual - self.base(messages)
 
 
 class BgeEncoder:

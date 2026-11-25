@@ -51,7 +51,9 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.3, help="retrieval softmax temperature")
     parser.add_argument("--adaptation", type=float, default=0.5)
     parser.add_argument("--pressure-power", type=float, default=1.0, help="1: paper formula, 2: quadratic pressure")
-    parser.add_argument("--pressure-mode", choices=("max", "occupancy"), default="max")
+    parser.add_argument("--pressure-mode", choices=("max", "occupancy", "window"), default="max")
+    parser.add_argument("--compression-start-ratio", type=float,
+                        help="start multigranularity when full active history reaches this budget fraction")
     parser.add_argument("--no-multigran", action="store_true")
     parser.add_argument("--no-glimpse", action="store_true")
     parser.add_argument("--actor", default="claude-sonnet-4-6")
@@ -75,7 +77,8 @@ def main():
         parser.error("provide --validation-lengths or --horizon for this task")
     cfg = Settings(horizon, args.budget, temperature=args.temperature, adaptation=args.adaptation,
                    multi_level=not args.no_multigran, glimpse_limit=0 if args.no_glimpse else 3,
-                   pressure_power=args.pressure_power, pressure_mode=args.pressure_mode)
+                   pressure_power=args.pressure_power, pressure_mode=args.pressure_mode,
+                   compression_start_ratio=args.compression_start_ratio)
     task = json.loads(args.task.read_text())
     tools = snapshot_tools(task["pages"])
     api = None

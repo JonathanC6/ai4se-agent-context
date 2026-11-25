@@ -109,9 +109,16 @@ class API:
                     total[k] += usage[k]
         return payload
 
-    def chat(self, model, messages, purpose, max_tokens=650):
+    def chat(self, model, messages, purpose, max_tokens=650, *, input_budget=None):
         payload = self.post("/chat/completions", {"model": model, "messages": messages,
             "temperature": 0, "max_tokens": max_tokens}, purpose)
+        if input_budget is not None:
+            actual = (payload.get("usage") or {}).get("prompt_tokens")
+            if type(actual) is not int or actual < 1:
+                raise ProviderError(f"{purpose}: missing valid provider input token count")
+            if actual > input_budget:
+                # 空动作交给 agent 记录预算终止；格式错误也不能绕过检查。
+                return {}
         try:
             choice = payload["choices"][0]
             return self.parse_reply(choice["message"]["content"])

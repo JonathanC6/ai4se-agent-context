@@ -137,6 +137,12 @@ class ArchiveBrowser(PublicBrowser):
         with (self.output / f"reader-{self.n}.jsonl").open("a") as f:
             f.write(json.dumps([kind, info], ensure_ascii=False) + "\n")
 
+    def load_document(self, url, when):
+        return document(url, when, self.use_cdx)
+
+    def extraction_offset(self, text, goal, requested):
+        return requested or 0
+
     def visit(self, args):
         urls, goals = items(args.get("url")), items(args.get("goal"))
         if len(goals) == 1:
@@ -148,13 +154,14 @@ class ArchiveBrowser(PublicBrowser):
             if not isinstance(when, str):
                 raise ValueError("as_of must be YYYY-MM-DD")
             date.fromisoformat(when)
-        offset = args.get("offset", 0)
-        if type(offset) != int or offset < 0:
+        requested = args.get("offset")
+        if requested is not None and (type(requested) != int or requested < 0):
             raise ValueError("invalid offset")
         result = []
         for url, goal in zip(urls, goals):
             try:
-                final, fmt, text, links = document(url, when, self.use_cdx)
+                final, fmt, text, links = self.load_document(url, when)
+                offset = self.extraction_offset(text, goal, requested)
                 if not text.strip() or offset >= len(text):
                     raise ValueError("no readable text at offset")
                 end = min(offset + 24000, len(text))
@@ -163,6 +170,8 @@ class ArchiveBrowser(PublicBrowser):
                 ranked = sorted(links, key=lambda u:len(keys & terms(links[u] + " " + u)), reverse=True)
                 menu = [{"url": u, "title": links[u][:140]} for u in ranked if urlsplit(u).scheme in ("https","http")][:12]
                 row = dict(url=url, read=True, source=final, format=fmt, as_of=when, extraction=extract, links=menu)
+                if getattr(self, "evidence", None) is not None:
+                    row.update(self.evidence.remember(final, text, offset, end))
             except (OSError, ValueError, LookupError, PyPdfError) as exc:
                 msg = f"HTTP {exc.code}" if isinstance(exc, HTTPError) else str(exc)[:180]
                 row = dict(url=url, read=False, as_of=when, message=msg)

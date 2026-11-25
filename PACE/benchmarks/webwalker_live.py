@@ -116,6 +116,14 @@ def received_page_text(turn):
     # visit 成功交给提取器的正文窗口才有这个头；仅返回链接的空页不计。
     if turn["kind"] != "visit":
         return False
+    if turn["observation"].startswith("["):
+        try:
+            rows = json.loads(turn["observation"])
+            return isinstance(rows, list) and any(
+                isinstance(row, dict) and row.get("read") is True and row.get("extraction")
+                for row in rows)
+        except ValueError:
+            return False
     header = turn["observation"].partition("\n")[0]
     match = re.fullmatch(r"https?://.+ chars (\d+):(\d+)/(\d+)", header)
     if not match:

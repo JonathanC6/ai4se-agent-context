@@ -2,7 +2,7 @@
 import math
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 
 class Level(IntEnum):
@@ -25,6 +25,7 @@ class Settings:
     guided_glimpse: bool = False
     pressure_power: float = 1.0
     pressure_mode: str = "max"
+    compression_start_ratio: Optional[float] = None
 
     def __post_init__(self):
         if min(self.horizon, self.budget, self.recent) < 1:
@@ -39,12 +40,17 @@ class Settings:
             raise ValueError("glimpse_limit must be between 0 and 3")
         if not math.isfinite(self.pressure_power) or self.pressure_power <= 0:
             raise ValueError("pressure_power must be finite and positive")
-        if self.pressure_mode not in ("max", "occupancy"):
+        if self.pressure_mode not in ("max", "occupancy", "window"):
             raise ValueError("unknown pressure mode")
+        if self.compression_start_ratio is not None and not 0 < self.compression_start_ratio <= 1:
+            raise ValueError("compression_start_ratio must be in (0, 1]")
 
     def pressure(self, step: int, previous_tokens: int) -> float:
-        progress = min(1.0, step / self.horizon)
+        """保留旧参数名。window 传本轮分档前的估值，其他模式传上步输入。"""
         occupancy = min(1.0, previous_tokens / self.budget)
+        if self.pressure_mode == "window":
+            return occupancy
+        progress = min(1.0, step / self.horizon)
         if self.pressure_mode == "occupancy":
             # 窗口越空，进度超过占用率的那一部分就越少计入压力。
             return occupancy + occupancy * max(0.0, progress - occupancy)

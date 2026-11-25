@@ -59,13 +59,23 @@ class FullRunAPI(API):
                 break
             except ProviderError as exc:
                 if attempt == 2 or not any(tag in str(exc) for tag in
-                        ("HTTP 429", "HTTP 502", "HTTP 503", "HTTP 504", "URLError", "TimeoutError")):
+                        ("HTTP 429", "HTTP 502", "HTTP 503", "HTTP 504", "URLError",
+                         "TimeoutError", "RemoteDisconnected", "ConnectionResetError")):
                     raise
                 sleep(2 ** (attempt + 1))
         usage = result.get("usage") or {}
         choice = (result.get("choices") or [{}])[0]
         line = {"job": self.job, "role": purpose, "finish_reason": choice.get("finish_reason"),
                 **{k: usage.get(k, 0) for k in ("prompt_tokens","completion_tokens","total_tokens")}}
+        if purpose == "actor" and hasattr(self, "actor_log"):
+            line.update(self.actor_log)
+            details = usage.get("prompt_tokens_details")
+            if isinstance(details, dict):
+                # 缓存读写是 prompt_tokens 的分项，账单总计只加服务端 total_tokens。
+                line["prompt_cache_details"] = {k: details[k] for k in ("cached_tokens", "cached_creation_tokens")
+                                                if type(details.get(k)) is int}
+            if isinstance(result.get("model"), str):
+                line["response_model"] = result["model"]
         with self.journal_lock, (self.output / "usage.jsonl").open("a") as f:
             f.write(json.dumps(line) + "\n")
         return result

@@ -14,6 +14,11 @@ class BudgetExceeded(ValueError):
     pass
 
 
+def block_text(chunk, level, body):
+    label = f"[C{chunk.id} {chunk.turn.kind} {level.name.lower()}]"
+    return label + "\n" + body if body else label
+
+
 @dataclass
 class Selection:
     chunk: Chunk
@@ -25,9 +30,7 @@ class Selection:
     summary_state: str
 
     def block(self, level):
-        label = f"[C{self.chunk.id} {self.chunk.turn.kind} {level.name.lower()}]"
-        text = self.representations[level]
-        return label + "\n" + text if text else label
+        return block_text(self.chunk, level, self.representations[level])
 
 
 @dataclass
@@ -40,9 +43,12 @@ class Context:
     selections: List[Selection]
 
     adjustment: Optional[dict] = None
+    window: Optional[dict] = None
 
     def trace(self):
-        return {**({"adjustment": self.adjustment} if self.adjustment is not None else {}), "step": self.step, "input_tokens_estimate": self.tokens, "pressure": self.pressure,
+        return {**({"adjustment": self.adjustment} if self.adjustment is not None else {}),
+                **({"window": self.window} if self.window is not None else {}),
+                "step": self.step, "input_tokens_estimate": self.tokens, "pressure": self.pressure,
                 "thresholds": self.boundaries, "chunks": [
                     {"id": s.chunk.id, "cos": s.cosine, "weight": s.weight,
                      "selected": s.requested.name, "shown": s.shown.name,
@@ -50,16 +56,53 @@ class Context:
 
 
 class Builder:
-    def __init__(self, system, query, memory: Memory, settings: Settings, counter, strategy=None):
+    def __init__(self, system, query, memory: Memory, settings: Settings, counter, strategy=None,
+                 trace_window=False):
         self.strategy = strategy
         self.system, self.query = system, query
         self.memory, self.settings, self.counter = memory, settings, counter
         self.previous_tokens = counter.messages(self.messages([]))
+        self.trace_window = trace_window or settings.pressure_mode == "window" or settings.compression_start_ratio is not None
+        self.previous_blocks = {}
+        self.activation_step = None
+        self.first_organization_step = None
+        self.last_window = None
 
     def messages(self, selections):
-        blocks = [self.query] + [s.block(s.shown) for s in selections]
+        return self.messages_from_blocks([s.block(s.shown) for s in selections])
+
+    def messages_from_blocks(self, blocks):
         return [{"role": "system", "content": self.system},
-                {"role": "user", "content": "\n\n".join(blocks)}]
+                {"role": "user", "content": "\n\n".join([self.query, *blocks])}]
+
+    def measure_window(self, chunks, old_count, step):
+        full = [block_text(c, Level.FULL, c.full) for c in chunks]
+        full_tokens = self.counter.messages(self.messages_from_blocks(full))
+        # 当前候选保留上次实际送出的粒度。新块、最近块和新设锚点按全文计入。
+        current = list(full)
+        anchors = getattr(self.strategy, "anchors", ())
+        for i, chunk in enumerate(chunks[:old_count]):
+            if chunk.id not in anchors and chunk.id in self.previous_blocks:
+                current[i] = self.previous_blocks[chunk.id]
+        current_tokens = full_tokens if current == full else self.counter.messages(self.messages_from_blocks(current))
+
+        ratio = self.settings.compression_start_ratio
+        phase = "multilevel" if old_count else "full_history"
+        if ratio is not None:
+            if self.activation_step is None and full_tokens >= self.settings.budget * ratio:
+                self.activation_step = step
+            if self.activation_step is None:
+                phase = "full_history"
+            elif not old_count:
+                phase = "awaiting_old_chunk"
+            else:
+                if self.first_organization_step is None:
+                    self.first_organization_step = step
+                if step == self.first_organization_step:
+                    phase = "first_multilevel"
+        return dict(full_input_estimate=full_tokens, current_input_estimate=current_tokens,
+                    compression_start_ratio=ratio, activation_step=self.activation_step,
+                    first_organization_step=self.first_organization_step, phase=phase)
 
     def build(self):
         chunks = self.memory.chunks
@@ -67,9 +110,20 @@ class Builder:
         # 步数按完整轨迹累计；改进策略可在评分前排除失活块。
         if self.strategy:
             chunks = [c for c in chunks if self.strategy.active(c.id)]
-        pressure = self.settings.pressure(step, self.previous_tokens)
-        bounds = self.settings.boundaries(pressure)
         old, recent = chunks[:-self.settings.recent], chunks[-self.settings.recent:]
+        if self.trace_window:
+            self.last_window = self.measure_window(chunks, len(old), step)
+        ratio = self.settings.compression_start_ratio
+        pressure_tokens = (self.last_window["current_input_estimate"] if self.settings.pressure_mode == "window"
+                           else self.previous_tokens)
+        if ratio is not None and self.last_window["phase"] != "multilevel":
+            # 触发当步采用基础阈值；之后即使窗口回落也继续分档。
+            pressure = 0.0
+        else:
+            pressure = self.settings.pressure(step, pressure_tokens)
+        if ratio is not None and self.activation_step is None:
+            old = []  # 门槛前所有活跃块均展示全文，入库摘要照常生成。
+        bounds = self.settings.boundaries(pressure)
         scores = []
         if old:
             query = "\n\n".join([self.query] + [c.full for c in recent])
@@ -92,10 +146,14 @@ class Builder:
                 versions.update({Level.BRIEF: summary.brief, Level.DETAILED: summary.detailed})
             shown = desired if desired in versions else Level.FULL
             rows.append(Selection(chunk, versions, desired, shown, score, weight, state))
-        adjustment = self.strategy.adjust(rows, len(old)) if self.strategy else None
+        organize = ratio is None or self.activation_step is not None
+        adjustment = self.strategy.adjust(rows, len(old)) if self.strategy and organize else None
         messages, tokens = self.fit(rows, len(old))
         self.previous_tokens = tokens
-        return Context(messages, tokens, step, pressure, bounds, rows, adjustment)
+        if self.trace_window:
+            self.previous_blocks = {s.chunk.id: s.block(s.shown) for s in rows if s.shown != Level.FULL}
+            self.last_window["organized_input_estimate"] = tokens
+        return Context(messages, tokens, step, pressure, bounds, rows, adjustment, self.last_window)
 
     def fit(self, rows, old_count):
         messages = self.messages(rows)
