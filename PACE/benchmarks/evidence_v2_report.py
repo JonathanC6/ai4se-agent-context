@@ -5,7 +5,7 @@ from collections import Counter
 
 from pace.policy import Settings
 from pace.records import write_result
-from .evidence_v2 import COHORT, CONTROL, OBSERVE_OUT, OUT
+from .evidence_v2 import COHORT, CONTROL, OBSERVE_OUT, OUT, REVIEWED_OUT
 from .webwalkerqa import CACHE, load_dataset
 from .window_study_report import case_metrics, read_ledger
 
@@ -42,6 +42,12 @@ def summarize(folder, dataset):
             counts[s["budget_stop"]] += 1
         recovery = []
         for step in row["steps"]:
+            if step["action"].get("origin") == "first_step_fallback":
+                if (cfg.get("action_protocol") != "reviewed-json-v1" or step["step"] != 1
+                        or step["action"]["tool"] != "search"
+                        or step["action"]["args"] != {"query": row["question"]}):
+                    raise ValueError(f"unexpected fallback action at row {n}")
+                counts["seeded_search"] += 1
             if cfg.get("method") == "evidence-v2":
                 policy = Settings(cfg["horizon"], budget=cfg["budget"], pressure_mode="evidence-v2")
                 w = step["window"]
@@ -91,7 +97,9 @@ def gateway_observations(folder):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--observe-gateway", action="store_true", help="对照新版 PACE 的两次独立运行")
+    choice = parser.add_mutually_exclusive_group()
+    choice.add_argument("--observe-gateway", action="store_true", help="对照新版 PACE 的两次独立运行")
+    choice.add_argument("--reviewed-actor", action="store_true", help="对照启用动作约束和提交前回看的两轮实验")
     args = parser.parse_args()
     data = load_dataset(CACHE)
     groups = {"react": CONTROL.parent, "legacy_pace": CONTROL.parent.parent / "pace", "evidence_v2": OUT}
@@ -103,6 +111,13 @@ def main():
         if new != dict(old, enforce_provider_budget=False):
             raise ValueError("the paired runs differ beyond gateway enforcement")
         groups = {"enforced": OUT, "observed": output}
+    if args.reviewed_actor:
+        output = REVIEWED_OUT
+        old = json.loads((OBSERVE_OUT / "config.json").read_text())
+        new = json.loads((output / "config.json").read_text())
+        if new != dict(old, action_protocol="reviewed-json-v1"):
+            raise ValueError("the comparison differs beyond the reviewed action protocol")
+        groups = {"observed": OBSERVE_OUT, "reviewed": output}
     result = {name: summarize(path, data) for name, path in groups.items()}
     if args.observe_gateway:
         result["observed"]["gateway_by_row"] = gateway_observations(output)

@@ -185,7 +185,9 @@ def episode(job, config, dataset, snapshots, encoder, output, browser=None, api_
             raise ValueError("unknown actor budget protocol")
         provider_budget = config.get("provider_input_budget")
         enforce = config.get("enforce_provider_budget", True)
-        guarded = BudgetedActor(api, CHAT, counter, budget, provider_budget, enforce_provider_budget=enforce) if strict else None
+        reviewed_actor = config.get("action_protocol") == "reviewed-json-v1"
+        guarded = BudgetedActor(api, CHAT, counter, budget, provider_budget, enforce_provider_budget=enforce,
+                                seed_query=row["question"] if reviewed_actor else None) if strict else None
         revised = config.get("method") == "evidence-v2"
         if (config.get("pressure_mode") == "evidence-v2") != revised:
             raise ValueError("pressure and method version differ")
@@ -197,7 +199,8 @@ def episode(job, config, dataset, snapshots, encoder, output, browser=None, api_
                        strategy=strategy_factory() if strategy_factory else None,
                        last_actor_messages=(lambda: guarded.last_messages) if guarded else None,
                        provider_input_budget=provider_budget, enforce_provider_budget=enforce,
-                       coverage_check=(lambda msgs: benchmark_chat(api, CHAT, msgs, "coverage")) if revised else None)
+                       coverage_check=(lambda msgs: benchmark_chat(api, CHAT, msgs, "coverage")) if revised else None,
+                       verify_compressed=reviewed_actor)
         if arm in ("pace", "dag-pace"):
             summarize = (lambda text: api.summarize(CHAT, text, evidence=True)) if revised else (lambda text: api.summarize(CHAT, text))
             with Memory(encoder, summarize) as memory:

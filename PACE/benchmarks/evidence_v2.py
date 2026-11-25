@@ -14,6 +14,7 @@ COHORT = (1, 2, 9, 15, 20, 21, 24, 25, 26, 27, 30, 33, 39, 40, 47, 48, 59, 115, 
 CONTROL = ROOT / "results/webwalker-window-study-matched20/react/config.json"
 OUT = ROOT / "results/webwalker-evidence-v2"
 OBSERVE_OUT = OUT.with_name(OUT.name + "-observe")
+REVIEWED_OUT = OUT.with_name(OUT.name + "-reviewed")
 
 
 def configuration(observe_gateway=False):
@@ -45,12 +46,15 @@ def main():
     parser.add_argument("--jobs", type=int, default=5)
     parser.add_argument("--out", type=Path)
     parser.add_argument("--observe-gateway", action="store_true", help="记录单次网关用量，超过参考线也继续执行")
+    parser.add_argument("--reviewed-actor", action="store_true", help="动作启用 JSON 模式，提交前核查压缩网页块")
     parser.add_argument("--rows", nargs="+", type=int, choices=COHORT)
     args = parser.parse_args()
     if args.jobs < 1 or (args.rows and len(set(args.rows)) != len(args.rows)):
         parser.error("choose positive concurrency and distinct rows")
-    config = configuration(args.observe_gateway)
-    args.out = args.out or (OBSERVE_OUT if args.observe_gateway else OUT)
+    config = configuration(args.observe_gateway or args.reviewed_actor)
+    if args.reviewed_actor:
+        config["action_protocol"] = "reviewed-json-v1"
+    args.out = args.out or (REVIEWED_OUT if args.reviewed_actor else OBSERVE_OUT if args.observe_gateway else OUT)
     args.out.mkdir(parents=True, exist_ok=True)
     run_cohort(load_dataset(CACHE), config, args.out, args.jobs,
                lambda root, api, n: ResearchBrowser(root, api, n, args.out, rank_rereads=True),

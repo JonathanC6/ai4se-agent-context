@@ -40,7 +40,8 @@ def instructions(tools, glimpse_limit, guided_glimpse=False):
 
 
 def run(query, tools, actor, memory, settings, counter, max_steps, actual_input_tokens=None, strategy=None,
-        last_actor_messages=None, provider_input_budget=None, coverage_check=None, enforce_provider_budget=True):
+        last_actor_messages=None, provider_input_budget=None, coverage_check=None, enforce_provider_budget=True,
+        verify_compressed=False):
     if max_steps < 1:
         raise ValueError("max_steps must be positive")
     if provider_input_budget is not None and (type(provider_input_budget) is not int or provider_input_budget < 1):
@@ -48,6 +49,9 @@ def run(query, tools, actor, memory, settings, counter, max_steps, actual_input_
     if set(tools).intersection(("finish", "glimpse")):
         raise ValueError("finish and glimpse are reserved tool names")
     system = instructions(tools, settings.glimpse_limit, settings.guided_glimpse)
+    if verify_compressed:
+        system += ('\nReturn the action as JSON, e.g. {"tool":"search","args":{"query":"specific terms"}}. '
+                   'After reviewing a recovered observation, finish as soon as the evidence answers the question.')
     if strategy:
         system += "\n" + strategy.instructions
     builder = Builder(system, query, memory, settings, counter, strategy,
@@ -57,6 +61,7 @@ def run(query, tools, actor, memory, settings, counter, max_steps, actual_input_
     if hasattr(counter, "method"):
         result["input_count_method"] = counter.method
     reviewed = False
+    restored = set()
     for _ in range(max_steps):
         try:
             context = builder.build()
@@ -102,6 +107,15 @@ def run(query, tools, actor, memory, settings, counter, max_steps, actual_input_
                             trace["coverage"]["goal"] = choice[2]
                     except (ProviderError, ValueError) as exc:
                         trace["coverage"].update(status="check_failed", error=str(exc)[:200])
+                    if verify_compressed and review is None and settings.glimpse_limit:
+                        # 最多补查一次已压缩的成功 visit，优先语义权重最高的未回看块。
+                        candidates = {item["chunk_id"] for item in index
+                                      if item["compressed"] and item["sources"]} - restored
+                        target = max((r for r in context.selections if r.chunk.id in candidates),
+                                     key=lambda r: (r.weight or 0, r.chunk.id), default=None)
+                        if target:
+                            review = ("glimpse", {"ids": [target.chunk.id]})
+                            trace["coverage"].update(status="verify_compressed", goal="Check the original visit evidence")
             elif not coverage_check and "reread" in tools and not reviewed and len(result["steps"]) < max_steps:
                 review = review_request(args, context, settings.glimpse_limit)
             if review is None:
@@ -131,6 +145,8 @@ def run(query, tools, actor, memory, settings, counter, max_steps, actual_input_
         if coverage_check and name in ("glimpse", "reread"):
             trace["recovery"] = dict(tool=name, trigger="automatic" if "evidence_review" in trace else "actor",
                                      ok=not observation.startswith("Tool error:"))
+            if name == "glimpse" and trace["recovery"]["ok"] and "goal" not in args:
+                restored.update(args["ids"])
         action = json.dumps({"tool": name, "args": args}, ensure_ascii=False, sort_keys=True)
         turn = Turn(note if isinstance(note, str) else "", action, observation,
                     name if isinstance(name, str) and name in {*tools, "glimpse"} else "invalid")

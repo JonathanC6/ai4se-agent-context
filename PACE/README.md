@@ -6,19 +6,19 @@ PACE 在每次调用 agent 前，决定哪些历史交互需要全文、详细�
 
 ## 新版 WebWalkerQA 实验
 
-固定 20 题中，ReAct 答对 6 题，标准 PACE 答对 10 题，新版 PACE 在网关用量仅记录时答对 7 题，沿用网关上限时答对 2 题。新版在全文达到预算的 90% 时开始分档，使用校准后的 `horizon=20`，并在提交前检查证据，按需恢复历史块或重读已访问的网页。[逐题结果与三组对照](../WebWalkerQA新版PACE证据恢复实验.md)
+固定 20 题上，本轮新版和标准 PACE 均提交 18 题、答对 10 题，共同答对 8 题。新版在全文达到预算的 90% 时开始分档，使用校准后的 `horizon=20`。本轮加入了首步格式恢复和交卷前压缩块复核。[本轮改动与逐题对照](../docs/WebWalkerQA标准与新版PACE逐题对照.md) · [前期证据恢复实验](../docs/WebWalkerQA新版PACE证据恢复实验.md)
 
 从 `PACE/` 下运行。下文“在线对照实验”给出了模型文件与依赖安装步骤。动作模型使用 Labhuan Claude Sonnet 4.6。题单和历史 ReAct 配置随仓库提供。该题单使用公开搜索后端；新查询通过 `benchmarks.webwalker_dynamic20 pending` 列出，`answer` 从标准输入接收搜索结果，相同查询复用本地缓存。
 
 ```sh
 export PYTHONPATH=src
-.venv/bin/python -m benchmarks.evidence_v2 --observe-gateway --jobs 6
+.venv/bin/python -m benchmarks.evidence_v2 --reviewed-actor
 ```
 
-默认每步发送前检查 6,000 token，响应后按 80,000 的网关输入上限停止。`--observe-gateway` 保留发送前预检和逐请求计量，允许超出网关参考线后继续解析动作。两种模式分别写入 `results/webwalker-evidence-v2/` 和 `results/webwalker-evidence-v2-observe/`。有两轮归档的机器可执行以下命令离线复算，原始轨迹和调用流水保存在实验机器上。
+本轮发送前检查 6,000 个可见 token，响应后记录网关用量，结果写入 `results/webwalker-evidence-v2-reviewed/`。调整前的对照使用 `--observe-gateway`，结果写入 `results/webwalker-evidence-v2-observe/`。有这两轮归档时，运行以下命令可离线核对评分和用量。
 
 ```sh
-PYTHONPATH=src .venv/bin/python -m benchmarks.evidence_v2_report --observe-gateway
+PYTHONPATH=src .venv/bin/python -m benchmarks.evidence_v2_report --reviewed-actor
 ```
 
 ## 快速运行
@@ -43,7 +43,7 @@ WebWalkerQA 默认用 `claude-sonnet-4-6` 生成动作、两级摘要和评分�
 | `src/pace/providers/` | `api.py` 管理托管请求与 token 用量，`encoding.py` 管理向量和 token 估算。 |
 | `benchmarks/` | 冻结站点、提供 search/visit、选择题目、执行与评分。逐步轨迹写入 `results/`。 |
 
-旧块权重为 `M × softmax(cos / 0.3)`。最近两块保留全文，旧块按相关度与压力分档。单次 `glimpse` 最多恢复三块。6K 实验用本地估值安排可见上下文，逐请求读取 Labhuan 的 `usage` 统计开销并检查 80K 网关保护上限。[两种压力公式、回看机制与逐题结果](../WebWalkerQA窗口预算与压力公式实验.md)
+旧块权重为 `M × softmax(cos / 0.3)`。最近两块保留全文，旧块按相关度与压力分档。单次 `glimpse` 最多恢复三块。6K 实验用本地估值安排可见上下文，逐请求读取 Labhuan 的 `usage` 统计开销。早期组用 80K 网关上限决定是否停止。[两种压力公式、回看机制与逐题结果](../docs/WebWalkerQA窗口预算与压力公式实验.md)
 
 ## 在线对照实验
 

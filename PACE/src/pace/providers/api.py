@@ -113,9 +113,12 @@ class API:
                     total[k] += usage[k]
         return payload
 
-    def chat(self, model, messages, purpose, max_tokens=650, *, input_budget=None, enforce_input_budget=True):
-        payload = self.post("/chat/completions", {"model": model, "messages": messages,
-            "temperature": 0, "max_tokens": max_tokens}, purpose)
+    def chat(self, model, messages, purpose, max_tokens=650, *, input_budget=None, enforce_input_budget=True,
+             json_mode=False):
+        body = dict(model=model, messages=messages, temperature=0, max_tokens=max_tokens)
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
+        payload = self.post("/chat/completions", body, purpose)
         if input_budget is not None:
             actual = (payload.get("usage") or {}).get("prompt_tokens")
             if type(actual) is not int or actual < 1:
