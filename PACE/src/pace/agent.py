@@ -79,12 +79,14 @@ def run(query, tools, actor, memory, settings, counter, max_steps, actual_input_
             if sent is not context.messages:
                 # 格式重试会添加一句提示，记录实际发送的版本。
                 trace["input_tokens_estimate"] = counter.messages(sent)
-            counter.observe(sent, actual)
+            valid_actual = type(actual) is int and actual > 0
+            if enforce_provider_budget or valid_actual:
+                counter.observe(sent, actual)
             trace["input_count_method"] = counter.method
-            trace["input_count_error"] = trace["input_tokens_estimate"] - actual
+            trace["input_count_error"] = trace["input_tokens_estimate"] - actual if valid_actual else None
         if type(actual) is int and actual > 0:
             # 独立网关上限下，组织上下文的压力与可见预算使用同一个计量口径。
-            builder.previous_tokens = actual if provider_input_budget is None else trace["input_tokens_estimate"]
+            builder.previous_tokens = actual if enforce_provider_budget and provider_input_budget is None else trace["input_tokens_estimate"]
             trace["input_tokens_actual"] = actual
         if coverage_check:
             trace["can_glimpse"] = any(r.shown.name != "FULL" for r in context.selections)
@@ -153,7 +155,8 @@ def run(query, tools, actor, memory, settings, counter, max_steps, actual_input_
         chunk = memory.append(turn)
         if strategy:
             visible = {row.chunk.id for row in context.selections}
-            trace["metadata"] = strategy.record(chunk.id, reply, visible, observation.startswith("Tool error:"))
+            metadata = {} if "evidence_review" in trace else reply
+            trace["metadata"] = strategy.record(chunk.id, metadata, visible, observation.startswith("Tool error:"))
     return result
 
 

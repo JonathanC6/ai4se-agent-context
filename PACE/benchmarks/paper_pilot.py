@@ -191,7 +191,7 @@ def episode(job, config, dataset, snapshots, encoder, output, browser=None, api_
         revised = config.get("method") == "evidence-v2"
         if (config.get("pressure_mode") == "evidence-v2") != revised:
             raise ValueError("pressure and method version differ")
-        if revised and (arm != "pace" or config.get("pressure_mode") != "evidence-v2" or not config.get("guided_glimpse")):
+        if revised and (arm not in ("pace", "dag-pace") or config.get("pressure_mode") != "evidence-v2" or not config.get("guided_glimpse")):
             raise ValueError("inconsistent evidence-v2 configuration")
         def execute(memory, settings):
             return run(prompt, tools, guarded or actor, memory, settings, counter, cap,

@@ -57,10 +57,18 @@ class VisibleWindowCounter:
         self.framing = framing
 
     def text(self, text):
-        return round(self.scale * len(self.codec.encode(text, add_special_tokens=False).ids))
+        return round(self.scale * self.subwords(text))
+
+    def subwords(self, text):
+        return len(self.codec.encode(text, add_special_tokens=False).ids)
+
+    def measure(self, messages):
+        """同一次分词得到正文子词量和实验预算估值，固定开销只加一次。"""
+        sizes = [self.subwords(m["content"]) for m in messages]
+        return sum(sizes), self.framing + sum(round(self.scale * n) for n in sizes)
 
     def base(self, messages):
-        return self.framing + sum(self.text(m["content"]) for m in messages)
+        return self.measure(messages)[1]
 
     def messages(self, messages):
         return self.base(messages)

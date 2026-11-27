@@ -3,7 +3,6 @@ import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import fcntl
-import hashlib
 import json
 import threading
 from pathlib import Path
@@ -11,8 +10,10 @@ from time import monotonic, sleep
 
 from pace.records import write_result
 from pace.providers import API, ProviderError, json_object
+from pace.providers.api import token_count, usage_fields
 from .full_webwalker_preflight import OUT
-from .paper_pilot import CAP, ENCODER, DenseEncoder, episode
+from .paper_pilot import ASSETS, CAP, ENCODER, DenseEncoder, episode
+from .usage_meter import chat_measurements, local_meter
 from .grading import grading_settings
 from .webwalker_live import Browser, CURRENT_BROWSER, LEGACY_BROWSER, hostname, received_page_text
 from .webwalkerqa import CACHE, CHAT, DATA_SHA, REVISION, load_dataset
@@ -64,23 +65,14 @@ class FullRunAPI(API):
                          "TimeoutError", "RemoteDisconnected", "ConnectionResetError")):
                     raise
                 sleep(2 ** (attempt + 1))
-        usage = result.get("usage") or {}
+        usage = usage_fields(result)
         choice = (result.get("choices") or [{}])[0]
         line = {"job": self.job, "role": purpose, "finish_reason": choice.get("finish_reason"),
-                **{k: usage.get(k, 0) for k in ("prompt_tokens","completion_tokens","total_tokens")}}
+                **{k: token_count(usage, k) or 0 for k in ("prompt_tokens","completion_tokens","total_tokens")}}
+        if path == "/chat/completions":
+            line.update(chat_measurements(body, result, local_meter(ASSETS / "tokenizer.json")))
         if purpose == "actor" and hasattr(self, "actor_log"):
             line.update(self.actor_log)
-            serialized = json.dumps(body["messages"], ensure_ascii=False, separators=(",", ":"))
-            line.update(message_chars=sum(len(m["content"]) for m in body["messages"]),
-                        messages_sha256=hashlib.sha256(serialized.encode()).hexdigest(),
-                        response_id=result.get("id"), requested_model=body["model"])
-            details = usage.get("prompt_tokens_details")
-            if isinstance(details, dict):
-                # 缓存读写是 prompt_tokens 的分项，账单总计只加服务端 total_tokens。
-                line["prompt_cache_details"] = {k: details[k] for k in ("cached_tokens", "cached_creation_tokens")
-                                                if type(details.get(k)) is int}
-            if isinstance(result.get("model"), str):
-                line["response_model"] = result["model"]
         with self.journal_lock, (self.output / "usage.jsonl").open("a") as f:
             f.write(json.dumps(line) + "\n")
         return result

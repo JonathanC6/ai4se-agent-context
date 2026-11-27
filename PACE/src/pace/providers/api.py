@@ -24,6 +24,16 @@ class ReplyFormatError(ProviderError):
     pass
 
 
+def usage_fields(payload):
+    usage = payload.get("usage")
+    return usage if isinstance(usage, dict) else {}
+
+
+def token_count(usage, field):
+    value = usage.get(field)
+    return value if type(value) is int and value >= 0 else None
+
+
 def json_object(content):
     if not isinstance(content, str):
         raise ValueError("missing text")
@@ -103,14 +113,15 @@ class API:
     def post(self, path, body, purpose):
         payload = self.request_json(path, body, purpose)
         # 使用服务端返回的 token，按动作、摘要、评分等角色分别累计。
-        usage = payload.get("usage") or {}
+        usage = usage_fields(payload)
         with self.lock:
             total = self.usage.setdefault(purpose, Counter())
             total["requests"] += 1
-            self.last_input_tokens[purpose] = usage.get("prompt_tokens")
+            self.last_input_tokens[purpose] = token_count(usage, "prompt_tokens")
             for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                if isinstance(usage.get(k), int):
-                    total[k] += usage[k]
+                value = token_count(usage, k)
+                if value is not None:
+                    total[k] += value
         return payload
 
     def chat(self, model, messages, purpose, max_tokens=650, *, input_budget=None, enforce_input_budget=True,
@@ -119,11 +130,11 @@ class API:
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         payload = self.post("/chat/completions", body, purpose)
-        if input_budget is not None:
-            actual = (payload.get("usage") or {}).get("prompt_tokens")
-            if type(actual) is not int or actual < 1:
+        if enforce_input_budget and input_budget is not None:
+            actual = token_count(usage_fields(payload), "prompt_tokens")
+            if actual is None or actual < 1:
                 raise ProviderError(f"{purpose}: missing valid provider input token count")
-            if enforce_input_budget and actual > input_budget:
+            if actual > input_budget:
                 # 空动作交给 agent 记录预算终止；格式错误也不能绕过检查。
                 return {}
         try:
